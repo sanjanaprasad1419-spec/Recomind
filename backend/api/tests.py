@@ -90,20 +90,54 @@ class SyllabusChapterParsingTests(SimpleTestCase):
         self.assertIn("Electric charge", chapters[0]["topics"])
 
 
-class NotesAnalysisTests(SimpleTestCase):
-    @patch("api.services.notes_analyzer.get_sentence_transformer_model", return_value=None)
-    def test_analyze_notes_returns_a_complete_response_for_larger_input(self, _get_model):
-        notes = ("Electric charge produces an electric field. Coulomb's law gives force between charges. " * 300)
-        response = APIClient().post(
-            "/api/analyze-notes/",
-            {
-                "note_text": notes,
-                "syllabus_text": "Electric Charge\nCoulomb's Law\nElectric Field",
-            },
-            format="json",
+class NotesAnalysisTests(TestCase):
+
+    def test_analyze_notes_mvp_response_and_qualitative_behavior(self):
+        syllabus = "1. Coulomb's Law\n2. Electric Field and Gauss's Law\n3. Electric Potential"
+
+        detailed_notes = (
+            "Coulomb's law states that the force between two point charges is directly proportional "
+            "to the product of charges and inversely proportional to the square of distance. "
+            "The electric field is defined as the force per unit charge in a region. "
+            "Gauss's law states that total electric flux through a closed surface is equal to enclosed charge divided by permittivity. "
+            "Electric potential is the work done in bringing a unit positive charge from infinity to a point."
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["status"], "success")
-        self.assertIn("coverage_percentage", response.data)
-        self.assertIn("topics", response.data)
-        self.assertIn("recommendations", response.data)
+
+        sparse_notes = (
+            "Coulomb's law describes force between two charges."
+        )
+
+        unrelated_notes = (
+            "Photosynthesis is the cellular process by which green plants and organisms convert sunlight, "
+            "water, and carbon dioxide into glucose sugar and oxygen gas inside chloroplast organelles."
+        )
+
+        client = APIClient()
+
+        # Detailed Notes Test
+        res_detailed = client.post("/api/analyze-notes/", {"note_text": detailed_notes, "syllabus_text": syllabus}, format="json")
+        self.assertEqual(res_detailed.status_code, 200)
+        self.assertIn("coverage_percentage", res_detailed.data)
+        self.assertIn("weak_topics", res_detailed.data)
+
+        # Sparse Notes Test
+        res_sparse = client.post("/api/analyze-notes/", {"note_text": sparse_notes, "syllabus_text": syllabus}, format="json")
+        self.assertEqual(res_sparse.status_code, 200)
+
+        # Unrelated Notes Test
+        res_unrelated = client.post("/api/analyze-notes/", {"note_text": unrelated_notes, "syllabus_text": syllabus}, format="json")
+        self.assertEqual(res_unrelated.status_code, 200)
+
+        cov_detailed = res_detailed.data["coverage_percentage"]
+        cov_sparse = res_sparse.data["coverage_percentage"]
+        cov_unrelated = res_unrelated.data["coverage_percentage"]
+
+        # Qualitative Behavior Check: Detailed > Sparse > Unrelated
+        self.assertGreater(cov_detailed, cov_sparse)
+        self.assertGreater(cov_sparse, cov_unrelated)
+
+    def test_analyze_notes_rejects_empty_inputs(self):
+        client = APIClient()
+        res = client.post("/api/analyze-notes/", {"note_text": "", "syllabus_text": "Coulomb's Law"}, format="json")
+        self.assertEqual(res.status_code, 400)
+

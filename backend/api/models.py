@@ -73,3 +73,21 @@ class Syllabus(models.Model):
         ordering = ['-upload_timestamp']
 
 
+class ReferenceKnowledgeCache(models.Model):
+    """
+    Cache model storing structured academic reference profiles for syllabus topics.
+    Prevents repeated expensive retrieval operations and provides persistent reference context.
+    """
+    cache_key = models.CharField(max_length=255, unique=True, db_index=True)
+    syllabus_title = models.CharField(max_length=255, blank=True, default="")
+    chapter_title = models.CharField(max_length=255, blank=True, default="")
+    topic_name = models.CharField(max_length=255, blank=True, default="")
+    structured_profile = models.JSONField(default=dict)
+    source_type = models.CharField(max_length=50, default="academic_curriculum")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"ReferenceCache [{self.cache_key}] - {self.topic_name}"
+
+
+

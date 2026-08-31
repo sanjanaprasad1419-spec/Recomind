@@ -3,10 +3,9 @@ from .views import (
     health_check, 
     upload_note, NoteListAPIView, NoteDetailAPIView, 
     upload_syllabus, SyllabusListAPIView, SyllabusDetailAPIView, syllabus_sections_view,
-    predict_domain_view, analyze_notes_view, enhance_notes_view, generate_topic_notes_view,
+    predict_domain_view, analyze_notes_view, analyze_notes_ai_view, enhance_notes_view, generate_topic_notes_view,
     download_pdf_report_view
 )
-
 
 
 urlpatterns = [
@@ -24,9 +23,10 @@ urlpatterns = [
     path('syllabus/<int:pk>/sections/', syllabus_sections_view, name='syllabus-sections'),
 
 
-    # ML Analysis, AI Enhancement & PDF Report Endpoints
+    # AI Coverage Analysis, AI Enhancement & PDF Report Endpoints
     path('predict-domain/', predict_domain_view, name='predict-domain'),
     path('analyze-notes/', analyze_notes_view, name='analyze-notes'),
+    path('analyze-notes-ai/', analyze_notes_ai_view, name='analyze-notes-ai'),
     path('enhance-notes/', enhance_notes_view, name='enhance-notes'),
     path('generate-topic-notes/', generate_topic_notes_view, name='generate-topic-notes'),
     path('analysis/download-pdf/', download_pdf_report_view, name='download-pdf'),

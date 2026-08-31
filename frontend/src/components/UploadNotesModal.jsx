@@ -85,17 +85,12 @@ export default function UploadNotesModal({ isOpen, onClose, onAnalysisSuccess, o
       setError('Please select a saved syllabus from the dropdown.');
       return;
     }
-    if (!selectedUnitId) {
-      setError('No chapters were detected for this syllabus. Upload a syllabus with chapter headings before analysis.');
-      return;
-    }
 
     setAnalyzing(true);
     setError('');
 
     try {
-      // Step 1: Reading notes...
-      setAnalysisStep('Reading your notes document...');
+      setAnalysisStep('Analyzing your notes...');
       const formData = new FormData();
       formData.append('file', selectedFile);
 
@@ -104,12 +99,6 @@ export default function UploadNotesModal({ isOpen, onClose, onAnalysisSuccess, o
       });
       const noteId = noteUploadRes.data.note.id;
 
-      // Step 2: Checking syllabus coverage...
-      setAnalysisStep('Checking syllabus coverage & parsing topics...');
-      
-      // Step 3: Analyzing topics...
-      setAnalysisStep('Analyzing topics with Sentence Transformer ML embeddings...');
-
       const analysisPayload = {
         note_id: noteId,
         syllabus_id: Number(selectedSyllabusId),
@@ -117,9 +106,6 @@ export default function UploadNotesModal({ isOpen, onClose, onAnalysisSuccess, o
       };
 
       const analysisRes = await axios.post(`${API_BASE_URL}/analyze-notes/`, analysisPayload);
-
-      // Step 4: Preparing recommendations...
-      setAnalysisStep('Preparing personalized study recommendations...');
       
       onAnalysisSuccess(analysisRes.data);
       onClose();

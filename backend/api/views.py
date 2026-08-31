@@ -1,7 +1,7 @@
 import os
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, parser_classes
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework import status, generics
 
@@ -14,11 +14,13 @@ from .serializers import (
 )
 from .services import (
     process_note_ocr, predict_domain, analyze_notes_against_syllabus,
-    extract_syllabus_text, parse_syllabus_into_units
+    extract_syllabus_text, parse_syllabus_into_units, analyze_notes_mvp
 )
+from .services.gemini_ai_coverage import analyze_notes_coverage_ai
 from .services.ai_notes_enhancer import enhance_notes_with_ai
 from .services.gemini_topic_notes import generate_topic_notes, TopicNotesGenerationError
 from .services.pdf_generator import generate_analysis_pdf
+
 
 
 @api_view(['GET'])
@@ -219,78 +221,126 @@ def predict_domain_view(request):
 
 
 @api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def analyze_notes_view(request):
     """
-    Core ML API endpoint comparing uploaded notes against a selected syllabus section/chapter.
+    Final Simplified RecoMind MVP Analysis Endpoint:
+    Accepts 1-chapter syllabus document/ID and student notes document/ID.
+    Extracts text for both, enriches reference context, and performs semantic ML comparison.
+    Returns strictly coverage_percentage and weak_topics.
     """
-    serializer = NoteAnalysisSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    note_id = serializer.validated_data.get('note_id')
-    note_text = serializer.validated_data.get('note_text', '').strip()
+    note_id = request.data.get('note_id')
+    note_text = request.data.get('note_text', '').strip()
     
-    syllabus_id = serializer.validated_data.get('syllabus_id')
-    syllabus_text = serializer.validated_data.get('syllabus_text', '').strip()
-    
-    unit_id = serializer.validated_data.get('unit_id', '').strip()
-    section_title = serializer.validated_data.get('section_title', '').strip()
+    syllabus_id = request.data.get('syllabus_id')
+    syllabus_text = request.data.get('syllabus_text', '').strip()
 
-    syllabus_name = "General Syllabus"
+    # Support raw file uploads directly in multipart form data
+    if 'syllabus_file' in request.FILES:
+        s_file = request.FILES['syllabus_file']
+        ext = os.path.splitext(s_file.name)[1].lower().replace('.', '')
+        s_obj = Syllabus.objects.create(
+            uploaded_file=s_file,
+            original_filename=s_file.name,
+            file_type=ext,
+            title=os.path.splitext(s_file.name)[0].replace('_', ' ').replace('-', ' ').title()
+        )
+        extracted = extract_syllabus_text(s_obj.uploaded_file.path, ext)
+        s_obj.extracted_text = extracted
+        s_obj.save()
+        syllabus_text = extracted
 
-    if note_id:
+    if 'note_file' in request.FILES:
+        n_file = request.FILES['note_file']
+        ext = os.path.splitext(n_file.name)[1].lower().replace('.', '')
+        n_obj = Note.objects.create(
+            uploaded_file=n_file,
+            original_filename=n_file.name,
+            file_type=ext
+        )
+        extracted = process_note_ocr(n_obj.uploaded_file.path, ext)
+        n_obj.extracted_text = extracted
+        n_obj.status = 'PROCESSED'
+        n_obj.save()
+        note_text = extracted
+
+    # Fetch from Note model if note_id provided
+    if note_id and not note_text:
         try:
-            note_obj = Note.objects.get(id=note_id)
-            if note_obj.extracted_text and note_obj.extracted_text.strip():
-                note_text = note_obj.extracted_text.strip()
-            else:
-                note_text = f"Study note title: {note_obj.original_filename}."
+            n_obj = Note.objects.get(id=note_id)
+            extracted = n_obj.extracted_text.strip() if n_obj.extracted_text else ""
+            if not extracted:
+                extracted = process_note_ocr(n_obj.uploaded_file.path, n_obj.file_type)
+                n_obj.extracted_text = extracted
+                n_obj.status = 'PROCESSED'
+                n_obj.save()
+            note_text = extracted
         except Note.DoesNotExist:
             return Response({"error": f"Note with ID {note_id} does not exist."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": f"Failed to read note file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
-    if syllabus_id:
+    unit_id = request.data.get('unit_id') or request.data.get('section_id') or request.data.get('chapter_id')
+    chapter_title = ""
+
+    # Fetch from Syllabus model if syllabus_id provided
+    if syllabus_id and not syllabus_text:
         try:
-            syl_obj = Syllabus.objects.get(id=syllabus_id)
-            syllabus_name = syl_obj.title
-            parsed_units = syl_obj.parsed_units or []
-
-            selected_unit = None
-            if unit_id:
-                for u in parsed_units:
-                    if u.get('unit_id') == unit_id:
-                        selected_unit = u
+            s_obj = Syllabus.objects.get(id=syllabus_id)
+            if unit_id and s_obj.parsed_units:
+                for u in s_obj.parsed_units:
+                    u_identifier = str(u.get('id') or u.get('unit_id') or '')
+                    if u_identifier == str(unit_id):
+                        u_topics = " ".join(u.get('topics', []))
+                        chapter_title = u.get('title', '')
+                        syllabus_text = f"{chapter_title} {u_topics}".strip()
                         break
 
-            if not selected_unit and section_title:
-                for u in parsed_units:
-                    if section_title.lower() in u.get('title', '').lower():
-                        selected_unit = u
-                        break
-
-            if parsed_units and not selected_unit:
-                return Response({"error": "Select a valid chapter from this syllabus before analysis."}, status=status.HTTP_400_BAD_REQUEST)
-
-            if selected_unit:
-                section_title = selected_unit.get('title', 'Selected Section')
-                topics_list = selected_unit.get('topics', [])
-                syllabus_text = "\n".join(topics_list)
-            else:
-                syllabus_text = syl_obj.extracted_text
+            if not syllabus_text:
+                syllabus_text = s_obj.extracted_text.strip() if s_obj.extracted_text else ""
+                if not syllabus_text:
+                    syllabus_text = extract_syllabus_text(s_obj.uploaded_file.path, s_obj.file_type)
+                    s_obj.extracted_text = syllabus_text
+                    s_obj.save()
         except Syllabus.DoesNotExist:
             return Response({"error": f"Syllabus with ID {syllabus_id} does not exist."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": f"Failed to read syllabus file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not section_title:
-        section_title = "Selected Syllabus Section"
+    # OCR text length check > 0
+    words_notes = [w for w in note_text.split() if len(w) >= 2]
+    if not note_text or len(words_notes) < 2:
+        return Response({
+            "error": "Unable to extract readable text from the uploaded student notes. Please upload a valid document or image with readable text."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    words_syl = [w for w in syllabus_text.split() if len(w) >= 1]
+    if not syllabus_text or len(words_syl) < 1:
+        return Response({
+            "error": "Unable to extract readable text from the uploaded syllabus document. Please upload a valid syllabus PDF or image."
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        results = analyze_notes_against_syllabus(note_text, syllabus_text)
-        results["syllabus_title"] = syllabus_name
-        results["section_title"] = section_title
-        return Response(results, status=status.HTTP_200_OK)
+        results = analyze_notes_mvp(note_text=note_text, syllabus_text=syllabus_text)
+        return Response({
+            "coverage_percentage": results["coverage_percentage"],
+            "weak_topics": results["weak_topics"],
+            "missing_topics": results.get("missing_topics", [])
+        }, status=status.HTTP_200_OK)
+
     except ValueError as ve:
         return Response({"error": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response({"error": "Failed to perform notes analysis", "details": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+@api_view(['POST'])
+def analyze_notes_ai_view(request):
+    """
+    Dedicated AI-Only Coverage endpoint (POST /api/analyze-notes-ai/).
+    """
+    return analyze_notes_view(request)
 
 
 @api_view(['POST'])

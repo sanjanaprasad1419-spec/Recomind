@@ -81,13 +81,16 @@ def normalize_concept_lines(raw_lines: list) -> list:
 
     for line in raw_lines:
         line = clean_text_formatting(line)
-        cl = re.sub(r'^[•\*\-\+\d\.\)\s]+', '', line).strip()
+        if not line:
+            continue
+
+        cl = re.sub(r'^(?:[•\*\-\+\s]+|\d+(?:\.\d+)*[\.\)\s]*)', '', line).strip()
+
         is_continuation = bool(re.match(r'^(and|or|of|in|to|the|with|for|a|an|[a-z])\b', cl))
         is_new_concept = (
             (line.startswith('•') or line.startswith('-') or re.match(r'^\d+[\.\)]', line) or re.match(r'^c\d+\.\d+', line, re.IGNORECASE))
             and not is_continuation
         )
-
 
         if is_new_concept:
             if current_phrase:
@@ -128,6 +131,7 @@ def parse_syllabus_into_units(syllabus_text: str) -> list:
     Extracts Part/Section -> Chapter/Theme -> Syllabus Concepts/Topics.
     
     Handles multi-page syllabi, tables, multi-part syllabi (Part 1, Part 2),
+    explicit chapter tags (Chapter 1, CHAPTER III), numbered themes (1. Oceans),
     and Course Outlines without creating broken fragments or fake chapters.
     """
     if not syllabus_text or not isinstance(syllabus_text, str):
@@ -149,13 +153,19 @@ def parse_syllabus_into_units(syllabus_text: str) -> list:
     raw_topic_buffers = {}
 
     part_pattern = re.compile(
-        r'^\s*(part\s*[\d\wIVX]+|section\s*[\d\wA-Z]+|unit\s*[\d\wIVX]+|class\s*[\d\wIXV]+)\b',
+        r'^\s*(part\s*[\d\wIVX]+|section\s*[\d\wA-Z]+|unit\s*[\d\wIVX]+)\b',
         re.IGNORECASE
     )
-    theme_start_pattern = re.compile(
-        r'^\s*(?:chapter|theme|module|unit)?\s*(?:(\d{1,2})[\.\)]\s+)([A-Za-z][A-Za-z0-9\s,\-\'\(\)]+)$',
+
+    explicit_chapter_pattern = re.compile(
+        r'^\s*\b(?:chapter|ch|theme|module|unit)\b[\s\-:#]*(\d+|[IVXLCDM]+)\s*(?:[:\-\.\u2013\u2014])?\s*(.+)?$',
         re.IGNORECASE
     )
+
+    numbered_chapter_pattern = re.compile(
+        r'^\s*(\d{1,2})(?:[\.\)\-\:\u2013\u2014]|\s+)(?!\d)\s*([A-Za-z][A-Za-z0-9\s,\-\'\(\)]+)$'
+    )
+
 
 
     learning_outcome_keywords = [
@@ -179,41 +189,35 @@ def parse_syllabus_into_units(syllabus_text: str) -> list:
             i += 1
             continue
 
-        # Check for Theme/Chapter Start (e.g. "1. Understanding Social Science", "2. Shaping of the Earth's Surface")
-        match = theme_start_pattern.match(line)
-        if match:
-            num, rest = match.groups()
+        # Match Chapter or Numbered Theme
+        match_exp = explicit_chapter_pattern.match(line)
+        match_num = numbered_chapter_pattern.match(line) if not match_exp else None
 
+        num = None
+        rest = None
 
-            title_parts = [rest]
+        if match_exp:
+            c_num, c_name = match_exp.groups()
+            num = c_num.strip()
+            rest = c_name.strip() if c_name else ""
+        elif match_num:
+            c_num, c_name = match_num.groups()
+            num = c_num.strip()
+            rest = c_name.strip()
+
+        if num is not None:
+            title_parts = [rest] if rest else []
             j = i + 1
-            
-            while j < N:
+
+            # Only look ahead for title continuation if rest is empty or incomplete
+            if not title_parts and j < N:
                 next_line = relevant_lines[j]
                 next_lower = next_line.lower()
-
-                if part_pattern.match(next_line) or theme_start_pattern.match(next_line):
-                    break
-                if re.match(r'^c\d+\.\d+', next_lower):
-                    break
-                if any(lo in next_lower for lo in ['students will be able', 'learning outcomes', 'cgs, cs']):
-                    break
-
-                if re.search(r'\(\d+\s*hours?\)', next_line, re.IGNORECASE):
+                if not re.match(r'^\d+\.\d+', next_line) and not part_pattern.match(next_line) and not explicit_chapter_pattern.match(next_line):
                     title_parts.append(next_line)
                     j += 1
-                    break
-                
-                if next_line.startswith('•') or next_line.startswith('-') or '  ' in next_line:
-                    break
 
-                if len(next_line) < 45 and not next_line.endswith('.') and not any(k in next_lower for k in ['explain', 'describe', 'understand', 'analyse', 'identify', 'categorise', 'differentiate']):
-                    title_parts.append(next_line)
-                    j += 1
-                else:
-                    break
-
-            raw_title = " ".join(title_parts)
+            raw_title = " ".join(title_parts).strip()
             clean_title = re.sub(r'\(\d+\s*hours?\)', '', raw_title, flags=re.IGNORECASE).strip()
             
             concept_split = re.split(r'[\•\-\:]', clean_title, maxsplit=1)
@@ -226,14 +230,15 @@ def parse_syllabus_into_units(syllabus_text: str) -> list:
                     part_slug = "part1"
 
                 theme_idx = len([s for s in sections if s["part"] == current_part]) + 1
-                unique_id = f"{part_slug}-theme{num or theme_idx}"
+                unique_id = f"chapter_{num}_{theme_idx}" if "part" not in current_part.lower() else f"{part_slug}-theme{num or theme_idx}"
 
-                display_label = f"{num or theme_idx} \u2014 {theme_name}"
+                is_explicit_ch = "chapter" in line_lower or "ch." in line_lower or "ch " in line_lower
+                display_label = f"Chapter {num} \u2014 {theme_name}" if is_explicit_ch else f"{num} \u2014 {theme_name}"
 
                 current_theme = {
                     "id": unique_id,
-                    "unit_id": unique_id, # alias for backward compatibility
-                    "number": str(num or theme_idx),
+                    "unit_id": unique_id,
+                    "number": str(num),
                     "name": theme_name,
                     "title": display_label,
                     "part": current_part,
@@ -248,25 +253,29 @@ def parse_syllabus_into_units(syllabus_text: str) -> list:
                 i = j
                 continue
 
-        # Topic/Concept Line Collection for Current Section
+
+
+        # Topic/Concept Collection
         if sections:
             curr = sections[-1]
             curr_id = curr["id"]
-            is_lo = any(lo_kw in line_lower for lo_kw in learning_outcome_keywords) or re.match(r'^c\d+\.\d+', line_lower) or re.match(r'^\d+\s*$', line_lower)
+            is_lo = any(lo_kw in line_lower for lo_kw in learning_outcome_keywords) or re.match(r'^c\d+\.\d+', line_lower)
+
             
             if not is_lo and len(line) >= 3 and not line.endswith(' Hours)'):
-                if not re.match(r'^(page|\d+|class|subject code)', line, re.IGNORECASE):
+                if not re.match(r'^(page\s+\d+|\d+\s*$|class\s+\d+|subject code)', line, re.IGNORECASE):
                     raw_topic_buffers[curr_id].append(line)
+
 
         i += 1
 
-    # Normalize concept lines for each section
+    # Normalize concept lines
     for s in sections:
         s_id = s["id"]
         raw_list = raw_topic_buffers.get(s_id, [])
         s["topics"] = normalize_concept_lines(raw_list)
 
-    # Deduplicate sections by unique_id
+    # Deduplicate sections
     deduped_sections = []
     seen_ids = set()
     for s in sections:
