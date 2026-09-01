@@ -9,7 +9,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 def generate_analysis_pdf(analysis_data: dict, syllabus_title: str = "General Syllabus", section_title: str = "All Topics") -> bytes:
     """
     Generates a publication-quality PDF summary report for RecoMind Notes Analysis,
-    including detailed predictions, placement guidance, exam paragraphs, refined notes draft, and full summary.
+    including calibrated scores, topic breakdown, missing solutions, extra content removed,
+    error audit corrections, and the complete refined notes draft.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -70,15 +71,6 @@ def generate_analysis_pdf(analysis_data: dict, syllabus_title: str = "General Sy
         fontName='Helvetica'
     )
 
-    code_style = ParagraphStyle(
-        'CodeTextCustom',
-        parent=styles['Normal'],
-        fontSize=8.5,
-        leading=12,
-        textColor=colors.HexColor("#f8fafc"),
-        fontName='Courier'
-    )
-
     story = []
 
     # Title & Header
@@ -88,88 +80,111 @@ def generate_analysis_pdf(analysis_data: dict, syllabus_title: str = "General Sy
 
     # Metadata & Score Table
     coverage_pct = analysis_data.get('coverage_percentage', 0.0)
+    accuracy_score = analysis_data.get('accuracy_score', coverage_pct)
+    quality_score = analysis_data.get('quality_score', 'Good')
     domain_name = analysis_data.get('domain', 'General Education')
 
     meta_data = [
         [
             Paragraph(f"<b>Syllabus:</b> {syllabus_title}", body_style),
-            Paragraph(f"<b>Overall Coverage:</b> <font color='{PRIMARY_BLUE.hexval()}'><b>{coverage_pct}%</b></font>", body_style)
+            Paragraph(f"<b>Coverage:</b> <font color='{PRIMARY_BLUE.hexval()}'><b>{coverage_pct}%</b></font>", body_style)
         ],
         [
             Paragraph(f"<b>Section:</b> {section_title}", body_style),
-            Paragraph(f"<b>Predicted Domain:</b> {domain_name}", body_style)
+            Paragraph(f"<b>Accuracy & Quality:</b> {accuracy_score}% ({quality_score})", body_style)
+        ],
+        [
+            Paragraph(f"<b>Subject Domain:</b> {domain_name}", body_style),
+            Paragraph(f"<b>Status:</b> {analysis_data.get('overall_status', 'Completed')}", body_style)
         ]
     ]
 
     meta_table = Table(meta_data, colWidths=[270, 270])
     meta_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), BG_LIGHT),
-        ('PADDING', (0, 0), (-1, -1), 7),
+        ('PADDING', (0, 0), (-1, -1), 6),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
     ]))
     story.append(meta_table)
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     # Topic Breakdown Section
     story.append(Paragraph("SYLLABUS TOPIC COVERAGE BREAKDOWN", h2_style))
-    
     topics = analysis_data.get('topics', {})
     covered = topics.get('covered', [])
     partially_covered = topics.get('partially_covered', [])
     missing = topics.get('missing', [])
 
     topic_rows = []
-    if covered:
-        for t in covered:
-            topic_rows.append([Paragraph(f"<font color='{GREEN_COLOR.hexval()}'><b>[COVERED]</b></font> {t}", body_style)])
-    if partially_covered:
-        for t in partially_covered:
-            topic_rows.append([Paragraph(f"<font color='{AMBER_COLOR.hexval()}'><b>[NEEDS IMPROVEMENT]</b></font> {t}", body_style)])
-    if missing:
-        for t in missing:
-            topic_rows.append([Paragraph(f"<font color='{RED_COLOR.hexval()}'><b>[MISSING]</b></font> {t}", body_style)])
+    for t in covered:
+        topic_rows.append([Paragraph(f"<font color='{GREEN_COLOR.hexval()}'><b>[COVERED]</b></font> {t}", body_style)])
+    for t in partially_covered:
+        topic_rows.append([Paragraph(f"<font color='{AMBER_COLOR.hexval()}'><b>[PARTIALLY COVERED]</b></font> {t}", body_style)])
+    for t in missing:
+        topic_rows.append([Paragraph(f"<font color='{RED_COLOR.hexval()}'><b>[MISSING]</b></font> {t}", body_style)])
 
     if not topic_rows:
         topic_rows.append([Paragraph("No topic breakdown available.", body_style)])
 
     topic_table = Table(topic_rows, colWidths=[540])
     topic_table.setStyle(TableStyle([
-        ('PADDING', (0, 0), (-1, -1), 4),
+        ('PADDING', (0, 0), (-1, -1), 3.5),
         ('LINEBELOW', (0, 0), (-1, -1), 0.3, colors.HexColor("#e2e8f0")),
     ]))
     story.append(topic_table)
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
-    # Detailed Recommendations & Placement Guidance
-    recs = analysis_data.get('recommendations', [])
-    if recs:
-        story.append(Paragraph("DETAILED PREDICTIONS & REFINED EXAM PARAGRAPHS", h2_style))
-        for r in recs:
-            prio = r.get('priority', 'MEDIUM')
-            t_name = r.get('topic', '')
-            action = r.get('recommendation', '')
-            placement = r.get('placement_guidance', '')
-            paragraph_text = r.get('suggested_paragraph', '')
+    # Missing Topic Solutions
+    missing_solutions = analysis_data.get('missing_solutions', [])
+    if missing_solutions:
+        story.append(Paragraph("MISSING & WEAK TOPIC STUDY SOLUTIONS", h2_style))
+        for sol in missing_solutions[:6]:
+            t_name = sol.get('topic', '')
+            status_tag = sol.get('status', 'MISSING')
+            definition = sol.get('definition', '')
+            formulas = sol.get('formulas', [])
+            exam_tip = sol.get('exam_tip', '')
 
-            p_color = RED_COLOR if prio == 'HIGH' else AMBER_COLOR
-
-            rec_content = [
-                Paragraph(f"<font color='{p_color.hexval()}'><b>[{prio} PRIORITY] {t_name}</b></font>", body_style),
-                Paragraph(f"<b>Placement Guidance:</b> {placement}", body_style) if placement else Paragraph("", body_style),
-                Paragraph(f"<b>Suggested Exam Paragraph:</b> {paragraph_text}", body_style) if paragraph_text else Paragraph(action, body_style)
+            sol_content = [
+                Paragraph(f"<font color='{RED_COLOR.hexval()}'><b>[{status_tag}] {t_name}</b></font>", body_style),
+                Paragraph(f"<b>Definition:</b> {definition}", body_style) if definition else Paragraph("", body_style),
+                Paragraph(f"<b>Formulas:</b> {', '.join(formulas)}", body_style) if formulas else Paragraph("", body_style),
+                Paragraph(f"<b>Exam Advice:</b> {exam_tip}", body_style) if exam_tip else Paragraph("", body_style)
             ]
 
-            r_table = Table([[c] for c in rec_content if c.text], colWidths=[540])
-            r_table.setStyle(TableStyle([
+            s_table = Table([[c] for c in sol_content if c.text], colWidths=[540])
+            s_table.setStyle(TableStyle([
                 ('PADDING', (0, 0), (-1, -1), 5),
                 ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#fffdf5")),
                 ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#fde68a")),
             ]))
-            story.append(r_table)
-            story.append(Spacer(1, 6))
+            story.append(s_table)
+            story.append(Spacer(1, 5))
 
-        story.append(Spacer(1, 8))
+    # Error Audit Corrections
+    corrections = analysis_data.get('corrections', [])
+    if corrections:
+        story.append(Paragraph("CHECK & CORRECT - DETECTED ACADEMIC CORRECTIONS", h2_style))
+        for corr in corrections[:4]:
+            t_name = corr.get('topic', '')
+            issue = corr.get('issue', '')
+            corrected = corr.get('corrected_version', '')
+
+            corr_content = [
+                Paragraph(f"<b>Topic:</b> {t_name}", body_style),
+                Paragraph(f"<font color='{RED_COLOR.hexval()}'><b>Issue:</b> {issue}</font>", body_style),
+                Paragraph(f"<font color='{GREEN_COLOR.hexval()}'><b>Corrected Version:</b> {corrected}</font>", body_style)
+            ]
+
+            c_table = Table([[c] for c in corr_content if c.text], colWidths=[540])
+            c_table.setStyle(TableStyle([
+                ('PADDING', (0, 0), (-1, -1), 5),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f0fdf4")),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#bbf7d0")),
+            ]))
+            story.append(c_table)
+            story.append(Spacer(1, 5))
 
     # Refined Notes Draft
     refined_draft = analysis_data.get('refined_notes_draft', '')
@@ -178,21 +193,14 @@ def generate_analysis_pdf(analysis_data: dict, syllabus_title: str = "General Sy
         draft_lines = refined_draft.split('\n')
         draft_p_list = [Paragraph(line.replace('<', '&lt;').replace('>', '&gt;'), body_style) for line in draft_lines if line.strip()]
         
-        draft_table = Table([[p] for p in draft_p_list[:25]], colWidths=[540]) # limit length for PDF spacing
+        draft_table = Table([[p] for p in draft_p_list[:30]], colWidths=[540])
         draft_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
             ('PADDING', (0, 0), (-1, -1), 4),
             ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
         ]))
         story.append(draft_table)
-        story.append(Spacer(1, 10))
-
-    # Full Comprehensive Notes Summary
-    full_summary = analysis_data.get('full_summary', {})
-    if full_summary and full_summary.get('overview'):
-        story.append(Paragraph("COMPREHENSIVE FULL NOTES SUMMARY", h2_style))
-        story.append(Paragraph(f"<b>Executive Overview:</b> {full_summary.get('overview')}", body_style))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 8))
 
     # Footer Notice
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=10, spaceAfter=8))

@@ -321,12 +321,20 @@ def analyze_notes_view(request):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        results = analyze_notes_mvp(note_text=note_text, syllabus_text=syllabus_text)
-        return Response({
-            "coverage_percentage": results["coverage_percentage"],
-            "weak_topics": results["weak_topics"],
-            "missing_topics": results.get("missing_topics", [])
-        }, status=status.HTTP_200_OK)
+        s_title = ""
+        if syllabus_id:
+            try:
+                s_title = Syllabus.objects.get(id=syllabus_id).title
+            except Exception:
+                pass
+
+        results = analyze_notes_mvp(
+            note_text=note_text,
+            syllabus_text=syllabus_text,
+            chapter_title=chapter_title,
+            syllabus_title=s_title
+        )
+        return Response(results, status=status.HTTP_200_OK)
 
     except ValueError as ve:
         return Response({"error": str(ve)}, status=status.HTTP_400_BAD_REQUEST)

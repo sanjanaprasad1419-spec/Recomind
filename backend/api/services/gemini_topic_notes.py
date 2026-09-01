@@ -10,8 +10,14 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except Exception:
+    genai = None
+    types = None
+    GENAI_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
